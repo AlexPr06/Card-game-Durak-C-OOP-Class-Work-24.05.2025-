@@ -453,6 +453,7 @@ int main() {
 			break;
 		}
 
+
 		if (turn)
 		{
 			// Player's turn
