@@ -6,6 +6,8 @@
 #include <ctime>
 #include <chrono>
 #include <thread>
+//#include <mutex>
+//#include <condition_variable>
 
 using namespace std;
 
@@ -107,6 +109,25 @@ int cardValueRank(const string& value) {
 	if (value == "K") return 13;
 	if (value == "A") return 14;
 	return 0; // for invalid or unknown values
+}
+
+string rankToCardValue(int rank) {
+	switch (rank) {
+	case 2: return "2";
+	case 3: return "3";
+	case 4: return "4";
+	case 5: return "5";
+	case 6: return "6";
+	case 7: return "7";
+	case 8: return "8";
+	case 9: return "9";
+	case 10: return "10";
+	case 11: return "J";
+	case 12: return "Q";
+	case 13: return "K";
+	case 14: return "A";
+	default: return "?"; // for invalid or unknown ranks
+	}
 }
 
 void sortByValue(vector<Card>& cards) {
@@ -232,8 +253,8 @@ public:
 		cout << endl;
 	}
 
-	void fullfillHand(vector<Card>& deck) {
-		while (getHand().size() < 6) {
+	void fullfillHand(vector<Card>& deck, int maxAmount) {
+		while (getHand().size() < maxAmount) {
 			if (deck.empty()) {
 				cout << "Deck is empty, cannot draw more cards." << endl;
 				break;
@@ -303,6 +324,36 @@ public:
 		}
 	}
 
+	bool ableToThrowInMoreCards(vector<int>& usedCardsValues,
+		vector<Card>& usedCards) {
+		for (const Card& card : getHand()) {
+			// Check if card value matches any used value
+			bool valueMatches = false;
+			for (int value : usedCardsValues) {
+				if (cardValueRank(card.value) == value) {
+					valueMatches = true;
+					break;
+				}
+			}
+
+			if (valueMatches) {
+				// Check if card hasn't been used yet
+				bool cardNotUsed = true;
+				for (const Card& usedCard : usedCards) {
+					if (usedCard == card) {
+						cardNotUsed = false;
+						break;
+					}
+				}
+
+				if (cardNotUsed) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 
 	~Player() {
 		cout << "Player " << name << " is destroyed." << endl;
@@ -338,11 +389,6 @@ public:
 		}
 		sortByValue(notTrumps);
 		sortByValue(trumps);
-		cout << endl;
-		for (Card& card : notTrumps) cout << card.toString() << " ";
-		cout << "   /   ";
-		for (Card& card : trumps) cout << card.toString() << " ";
-		cout << endl;
 		if (!notTrumps.empty())
 		{
 			sortByValue(notTrumps);
@@ -371,6 +417,130 @@ public:
 	};
 };
 
+
+bool beaten(Player* player, Bot* bot, Card& cardTrump, vector<int>& validCardsInRound,
+	vector<Card>& usedByPlayerCards, vector<Card>& usedByBotCards, bool& botCanBeat)
+{
+	Card playerCard;
+	bool validCard = false;
+
+	// Player selects a card with validation
+	while (!validCard) {
+		playerCard = player->playerMove();
+
+		// Check if card hasn't been used yet
+		bool cardNotUsed = true;
+		for (const Card& usedCard : usedByPlayerCards) {
+			if (usedCard == playerCard) {
+				cardNotUsed = false;
+				break;
+			}
+		}
+
+		if (validCardsInRound.empty()) {  // First card in the round
+			if (cardNotUsed) {
+				validCard = true;
+			}
+			else {
+				cout << "You've already used this card in this round.\n";
+			}
+		}
+		else {  // Additional cards in the round
+			bool valueMatches = false;
+			for (int value : validCardsInRound) {
+				if (cardValueRank(playerCard.value) == value) {
+					valueMatches = true;
+					break;
+				}
+			}
+
+			if (valueMatches && cardNotUsed) {
+				validCard = true;
+			}
+			else {
+				cout << "Invalid card. Must match values of already played cards and not be used.\n";
+			}
+		}
+	}
+
+	validCardsInRound.push_back(cardValueRank(playerCard.value));
+	usedByPlayerCards.push_back(playerCard);
+
+	// Bot's card beating logic
+	if (botCanBeat && bot->canBeat(playerCard, cardTrump)) {
+		Card botCard = bot->findCardToBeat(playerCard, cardTrump);
+		cout << "Bot beats your " << playerCard.toString() << " with " << botCard.toString() << endl;
+
+		validCardsInRound.push_back(cardValueRank(botCard.value));
+		usedByBotCards.push_back(botCard);
+		return true;  // Bot successfully beat the card
+	}
+	else {
+		if (!botCanBeat) {
+			cout << "Bot cannot beat your card in this round." << endl;
+		}
+		else {
+			cout << "Bot cannot beat your card. You win this round!" << endl;
+			bot->addCard(playerCard);  // Bot takes the card
+			bot->setAmountOfCardsInHand(bot->getAmountOfCardsInHand() + 1);
+			botCanBeat = false;  // Bot can no longer beat in this round
+		}
+		return false;  // Bot didn't beat the card
+	}
+}
+
+void playerTurn(Player* player, Bot* bot, Card& cardTrump, bool& turn, Deck* deck, int maxAmountToFullfill)
+{
+	cout << MAGENTA << "Player's turn." << RESET << endl;
+
+	bool botCanBeat = true;  // Whether bot can beat cards this round
+	vector<int> validCardsInRound = {};  // Valid card values for throwing in
+	vector<Card> usedByPlayerCards;  // Player's used cards
+	vector<Card> usedByBotCards;     // Bot's used cards
+
+	// Player's first move
+	bool wasBeaten = beaten(player, bot, cardTrump, validCardsInRound,
+		usedByPlayerCards, usedByBotCards, botCanBeat);
+
+	// Option to throw in more cards
+	bool canAddMore = player->ableToThrowInMoreCards(validCardsInRound, usedByPlayerCards);
+	if (canAddMore) {
+		cout << "You can throw in more cards. Would you like to? (yes/no): ";
+		string answer;
+		cin >> answer;
+
+		while (answer == "yes" && player->ableToThrowInMoreCards(validCardsInRound, usedByPlayerCards)) {
+			cout << endl << "You can throw in further cards values: ";
+			for (int value : validCardsInRound) {
+				cout << rankToCardValue(value) << " ";
+			}
+			cout << endl;
+			wasBeaten = beaten(player, bot, cardTrump, validCardsInRound,
+				usedByPlayerCards, usedByBotCards, botCanBeat);
+
+			if (!wasBeaten) break;  // If bot couldn't beat - end the round
+
+			cout << "You can throw in more cards. Would you like to? (yes/no): ";
+			cin >> answer;
+		}
+	}
+
+	// Remove used cards from hands
+	for (Card& card : usedByPlayerCards) {
+		player->getRidOfCard(card);
+	}
+	for (Card& card : usedByBotCards) {
+		bot->getRidOfCard(card);
+	}
+	
+	// Change turn if bot failed to beat at least one card
+	if (wasBeaten) {
+		turn = !turn;  // Switch turn
+		bot->fullfillHand(deck->getDeck(), 6);  // Bot draws cards to fulfill hand
+	}
+	player->fullfillHand(deck->getDeck(), 6);  // Player draws cards to fulfill hand
+}
+
 int main() {
 	cout << GREEN << R"(
  __    __    ___  _        __   ___   ___ ___    ___      ______   ___       ______  __ __    ___       ____   ____  ___ ___    ___  __ 
@@ -387,6 +557,7 @@ int main() {
 	Deck* deck = new Deck();
 	Player* player = new Player("Player");
 	Bot* bot = new Bot("Bot");
+	const int MAX_CARDS_IN_HAND = 6; // Maximum cards in hand for each player
 
 	/*cout << "Available suits: ";
 	for (const auto& suit : deck->getSuits()) {
@@ -411,11 +582,11 @@ int main() {
 	deck->setTrumpIndex(stringTrump);
 
 
-	player->fullfillHand(deck->getDeck());
+	player->fullfillHand(deck->getDeck(), MAX_CARDS_IN_HAND);
 	
 	cout << "Player's hand after fulfilling: ";
 	player->showHand();
-	bot->fullfillHand(deck->getDeck());
+	bot->fullfillHand(deck->getDeck(), MAX_CARDS_IN_HAND);
 	cout << "Bot's hand after fulfilling: ";
 	bot->showHand();
 
@@ -457,32 +628,13 @@ int main() {
 		if (turn)
 		{
 			// Player's turn
-			vector <string> validCardsInRound;
-			cout << "Player's turn." << endl;
-			Card playerCard = player->playerMove();
-			validCardsInRound.push_back(playerCard.value);
-			if (bot->canBeat(playerCard, cardTrump))
-			{
-				cout << "Bot can beat your card." << endl;
-				Card botCard = bot->findCardToBeat(playerCard, cardTrump);
-
-				cout << "Bot plays beats your card " << playerCard.toString() << " with "<< botCard.toString() << endl;
-				validCardsInRound.push_back(botCard.value);
-				bot->getRidOfCard(botCard); // Remove played card from bot's hand
-				turn = !turn; // Switch to bot's turn
-			}
-			else {
-				cout << "Bot cannot beat your card. You win this round!" << endl;
-				bot->addCard(playerCard); // Player keeps the card
-				bot->setAmountOfCardsInHand(bot->getAmountOfCardsInHand() + 1);
-			}
-			player->getRidOfCard(playerCard); // Remove played card from player's hand
+			playerTurn(player, bot, cardTrump, turn, deck, MAX_CARDS_IN_HAND);
 			
 		}
 		else {
 			// Bot's turn
 			vector <string> validCardsInRound;
-			cout << "Bot's turn." << endl;
+			cout << MAGENTA << "Bot's turn." << RESET << endl;
 			cout << "Bot is thinking..." << endl;
 			this_thread::sleep_for(chrono::seconds(1)); // Simulate bot thinking time
 			Card botCard = bot->botMove();
